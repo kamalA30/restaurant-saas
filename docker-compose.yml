@@ -1,0 +1,109 @@
+version: '3.9'
+
+services:
+  # ─────────────────────────────────────────
+  # APPLICATION
+  # ─────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: ${NODE_ENV:-development}
+    container_name: restaurant_api
+    restart: unless-stopped
+    ports:
+      - '${PORT:-3000}:3000'
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-restaurant_saas}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      JWT_ACCESS_EXPIRES_IN: ${JWT_ACCESS_EXPIRES_IN:-15m}
+      JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN:-7d}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    volumes:
+      - ./logs:/app/logs
+      - .:/app                         # dev only (hot reload)
+      - /app/node_modules              # don't override node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - restaurant_net
+    command: npm run start:dev         # overridden in prod Dockerfile
+
+  # ─────────────────────────────────────────
+  # DATABASE
+  # ─────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: restaurant_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-restaurant_saas}
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-postgres}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - restaurant_net
+
+  # ─────────────────────────────────────────
+  # REDIS (caching / pub-sub / queues)
+  # ─────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: restaurant_redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - restaurant_net
+
+  # ─────────────────────────────────────────
+  # PRISMA STUDIO (dev only)
+  # ─────────────────────────────────────────
+  prisma-studio:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    container_name: prisma_studio
+    command: npx prisma studio --port 5555 --browser none
+    ports:
+      - '5555:5555'
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-restaurant_saas}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - restaurant_net
+    profiles:
+      - tools
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  restaurant_net:
+    driver: bridge

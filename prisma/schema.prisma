@@ -1,0 +1,329 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────
+
+enum Role {
+  SUPER_ADMIN
+  OWNER
+  BRANCH_MANAGER
+  CASHIER
+  CHEF
+  WAITER
+}
+
+enum OrderStatus {
+  PENDING
+  PREPARING
+  READY
+  COMPLETED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  ONLINE
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  REFUNDED
+}
+
+// ─────────────────────────────────────────
+// USERS & AUTH
+// ─────────────────────────────────────────
+
+model User {
+  id           String  @id @default(uuid())
+  email        String  @unique
+  password     String
+  firstName    String
+  lastName     String
+  phone        String?
+  role         Role    @default(CASHIER)
+  isActive     Boolean @default(true)
+  refreshToken String?
+
+  // Multi-tenant: owner links to a restaurant
+  restaurantId String?
+  restaurant   Restaurant? @relation("RestaurantOwner", fields: [restaurantId], references: [id])
+
+  // Branch assignment (for managers, cashiers, chefs)
+  branchUsers BranchUser[]
+
+  // Relations
+  orders    Order[]    @relation("CashierOrders")
+  auditLogs AuditLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([email])
+  @@index([restaurantId])
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  isRevoked Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([token])
+  @@map("refresh_tokens")
+}
+
+// ─────────────────────────────────────────
+// MULTI-TENANT: RESTAURANTS & BRANCHES
+// ─────────────────────────────────────────
+
+model Restaurant {
+  id       String  @id @default(uuid())
+  name     String
+  country  String  @default("DE")
+  city     String
+  logoUrl  String?
+  isActive Boolean @default(true)
+
+  // Owner
+  owners User[] @relation("RestaurantOwner")
+
+  // Branches
+  branches Branch[]
+
+  // Menu categories scoped to restaurant
+  categories Category[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([name])
+  @@map("restaurants")
+}
+
+model Branch {
+  id           String   @id @default(uuid())
+  restaurantId String
+  name         String
+  address      String
+  city         String
+  phone        String?
+  isActive     Boolean  @default(true)
+  latitude     Float?
+  longitude    Float?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // العلاقات الموجودة لديك سابقاً...
+  restaurant    Restaurant       @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  users         BranchUser[]
+  menuOverrides BranchMenuItem[]
+  orders        Order[]
+
+  // 🌟 أضف هذا السطر لحل المشكلة فوراً 🌟
+  categories Category[] // يخبر بريسما أن الفرع يمكن أن يحتوي على عدة تصنيفات محلية
+}
+
+// Junction: user ↔ branch with role scoped to that branch
+model BranchUser {
+  id       String @id @default(uuid())
+  branchId String
+  userId   String
+  role     Role
+
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  assignedAt DateTime @default(now())
+
+  @@unique([branchId, userId])
+  @@index([branchId])
+  @@index([userId])
+  @@map("branch_users")
+}
+
+// ─────────────────────────────────────────
+// MENU
+// ─────────────────────────────────────────
+
+model Category {
+  id           String @id @default(uuid())
+  restaurantId String
+
+  branchId String?
+
+  name        String
+  description String?
+  imageUrl    String?
+  sortOrder   Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  branch Branch? @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  items MenuItem[]
+
+  @@index([restaurantId])
+  @@index([branchId])
+  @@map("categories")
+}
+
+model MenuItem {
+  id                     String   @id @default(uuid())
+  categoryId             String
+  name                   String
+  description            String?
+  basePrice              Decimal  @db.Decimal(10, 2)
+  imageUrl               String?
+  isAvailable            Boolean  @default(true)
+  isActive               Boolean  @default(true)
+  preparationTimeMinutes Int      @default(10)
+  calories               Int?
+  allergens              String[] // e.g. ["gluten", "dairy"]
+
+  category        Category         @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  branchOverrides BranchMenuItem[]
+  orderItems      OrderItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([categoryId])
+  @@map("menu_items")
+}
+
+// Branch-specific price or availability overrides
+model BranchMenuItem {
+  id          String   @id @default(uuid())
+  branchId    String
+  menuItemId  String
+  price       Decimal? @db.Decimal(10, 2) // null = use base price
+  isAvailable Boolean  @default(true)
+
+  branch   Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  menuItem MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+
+  @@unique([branchId, menuItemId])
+  @@index([branchId])
+  @@map("branch_menu_items")
+}
+
+// ─────────────────────────────────────────
+// ORDERS
+// ─────────────────────────────────────────
+
+model Order {
+  id            String        @id @default(uuid())
+  orderNumber   String        @unique // human-readable e.g. "BR1-2024-00042"
+  branchId      String
+  cashierId     String
+  status        OrderStatus   @default(PENDING)
+  paymentMethod PaymentMethod @default(CASH)
+  paymentStatus PaymentStatus @default(PENDING)
+
+  subtotal Decimal @db.Decimal(10, 2)
+  tax      Decimal @default(0) @db.Decimal(10, 2)
+  discount Decimal @default(0) @db.Decimal(10, 2)
+  total    Decimal @db.Decimal(10, 2)
+
+  note        String?
+  tableNumber String?
+
+  // Timestamps for analytics (time-in-status)
+  pendingAt   DateTime?
+  preparingAt DateTime?
+  readyAt     DateTime?
+  completedAt DateTime?
+  cancelledAt DateTime?
+
+  branch  Branch      @relation(fields: [branchId], references: [id])
+  cashier User        @relation("CashierOrders", fields: [cashierId], references: [id])
+  items   OrderItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([branchId])
+  @@index([cashierId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([orderNumber])
+  @@map("orders")
+}
+
+model OrderItem {
+  id         String  @id @default(uuid())
+  orderId    String
+  menuItemId String
+  quantity   Int
+  unitPrice  Decimal @db.Decimal(10, 2) // price at time of order (snapshot)
+  totalPrice Decimal @db.Decimal(10, 2)
+  note       String?
+
+  order    Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuItem MenuItem @relation(fields: [menuItemId], references: [id])
+
+  @@index([orderId])
+  @@index([menuItemId])
+  @@map("order_items")
+}
+
+// ─────────────────────────────────────────
+// ANALYTICS SNAPSHOTS (for AI Agent later)
+// ─────────────────────────────────────────
+
+model DailySalesSnapshot {
+  id              String   @id @default(uuid())
+  branchId        String
+  date            DateTime @db.Date
+  totalOrders     Int
+  totalRevenue    Decimal  @db.Decimal(12, 2)
+  avgOrderValue   Decimal  @db.Decimal(10, 2)
+  peakHour        Int? // hour 0-23
+  cancelledOrders Int      @default(0)
+
+  @@unique([branchId, date])
+  @@index([branchId])
+  @@index([date])
+  @@map("daily_sales_snapshots")
+}
+
+// ─────────────────────────────────────────
+// AUDIT LOG
+// ─────────────────────────────────────────
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String
+  action     String
+  resource   String
+  resourceId String?
+  metadata   Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([resource])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
