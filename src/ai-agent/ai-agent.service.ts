@@ -1,9 +1,9 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
-// 🌟 العودة للمحرك المباشر المتوافق مع مفتاح Gemini API في لوحة التحكم
+// 🌟 Direct model instance compatible with Gemini API Key
 import { ChatGoogleGenerativeAI } from '@langchain/google-genai'; 
 import { AnalyticsService } from '../analytics/analytics.service';
 import { SYSTEM_PROMPT } from './prompts/system.prompt';
-// 🛠️ استيراد الأدوات الثلاث بالكامل
+// 🛠️ Import all three analytics tools
 import { createOrderStatsTool, createTopItemsTool, createFullSnapshotTool } from './tools/analytics.tool';
 import { StateGraph, END, START, Annotation } from '@langchain/langgraph';
 import { AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
@@ -28,24 +28,24 @@ export class AiAgentService implements OnModuleInit {
   constructor(private readonly analyticsService: AnalyticsService) {}
 
   onModuleInit() {
-    // 🌟 تشغيل الموديل المتوافق 100% مع صلاحية الـ Gemini API والنسخة المستقرة
+    // 🌟 Initialize the Gemini model with API Key configuration
     this.model = new ChatGoogleGenerativeAI({
-      model: 'gemini-2.5-flash', // الاصدار الأحدث والمدفوع في حسابك
+      model: 'gemini-2.5-flash', // Latest stable Gemini model
       temperature: 0,
       apiKey: process.env.GOOGLE_API_KEY,
     });
 
-    // 🔄 تأكيد تسجيل الأدوات الثلاث معاً في مصفوفة التشغيل
+    // 🔄 Register all available tools in the execution array
     const tools = [
-      createOrderStatsTool(this.analyticsService),  // 📊 الأداة 1: ملخص الإحصائيات العامة
-      createTopItemsTool(this.analyticsService),    // 🍔 الأداة 2: الأطباق الأعلى مبيعاً
-      createFullSnapshotTool(this.analyticsService), // 📈 الأداة 3: التقرير التحليلي الشامل
+      createOrderStatsTool(this.analyticsService),  // 📊 Tool 1: General order statistics summary
+      createTopItemsTool(this.analyticsService),    // 🍔 Tool 2: Top-selling items
+      createFullSnapshotTool(this.analyticsService), // 📈 Tool 3: Full analytics snapshot
     ];
 
-    // ربط الأدوات الثلاث بالموديل ليتعرف على الـ Schemas والـ Parameters الخاصة بها
+    // Bind tools to the model so it recognizes their schemas and parameters
     this.model = this.model.bindTools(tools);
     
-    // بناء الخريطة البرمجية لاستدعاء الأدوات ديناميكياً بناءً على الاسم الممرر من الـ AI
+    // Build tool map for dynamic execution based on tool_calls name
     for (const tool of tools) {
       this.toolsMap[tool.name] = tool;
     }
@@ -73,25 +73,25 @@ export class AiAgentService implements OnModuleInit {
         const tool = this.toolsMap[call.name];
         if (tool) {
           
-          // 🛡️ طبقة الحماية الصارمة لوسائط الأدوات (🔐 بقيت كما هي دون لمس لضمان الأمان)
+          // 🛡️ Strict security layer for tool arguments (Multi-tenant isolation)
           let finalBranchId = call.args.branchId;
 
-          // القيد الأول: مدير الفرع يُحجز ويُقيد داخل فرعه المعين عليه حتماً ولن يرى غيره
+          // Restriction 1: Branch Manager is strictly scoped to their assigned branchId
           if (state.userContext.role === 'BRANCH_MANAGER') {
             finalBranchId = state.userContext.branchId;
           } 
-          // القيد الثاني: المالك يرى فروع مطعمه فقط، ونعتمد على ما يستنتجه الـ AI للفرع بشرط قفل الـ restaurantId
+          // Restriction 2: Owner can query any branch, but restaurantId remains strictly locked
           else if (state.userContext.role === 'OWNER') {
             finalBranchId = call.args.branchId;
           }
 
           const secureArgs = { 
-            ...call.args, // المتغيرات التشغيلية الأخرى القادمة من الـ AI (مثل التواريخ أو الفلاتر والـ limit)
-            restaurantId: state.userContext.restaurantId, // قفل عزل المطعم الأساسي للمالك والمدير
-            branchId: finalBranchId // الفلتر الجغرافي الآمن والمطهر والمحمي من الـ Injection
+            ...call.args, // Dynamic operational parameters passed by the AI (e.g., limits, filters)
+            restaurantId: state.userContext.restaurantId, // Enforce multi-tenant restaurant isolation lock
+            branchId: finalBranchId // Sanitized and validated branch identifier
           };
           
-          // استدعاء الأداة المختارة بأمان تام بعد تطهير المدخلات
+          // Invoke tool safely with sanitized arguments
           const resultText = await tool.invoke(secureArgs);
           
           toolOutputs.push(new ToolMessage({ 
