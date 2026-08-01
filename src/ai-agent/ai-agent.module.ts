@@ -4,7 +4,7 @@ import { AiAgentService } from './ai-agent.service';
 import { AnalyticsModule } from '../analytics/analytics.module';
 
 @Module({
-  imports: [AnalyticsModule], // 🌟 حقن موديول التحليلات هو السر الذي يسمح لـ الـ Tools بالعمل
+  imports: [AnalyticsModule], // 🌟Injecting the analytics module is the secret that allows the tools to work
   controllers: [AiAgentController],
   providers: [AiAgentService],
   exports: [AiAgentService],
